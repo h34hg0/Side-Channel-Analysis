@@ -108,3 +108,13 @@ EXTRA_OPTS = NO_EXTRA_OPTS
 CFLAGS += -D$(EXTRA_OPTS)
 
 include $(FIRMWAREPATH)/Makefile.inc
+
+# ---------------------------------------------------------------------------
+# OPT only applies to the ML-KEM code (pqm4/PQClean + fips202). The UART/HAL,
+# SimpleSerial and command-handler objects are always built with -O$(COMM_OPT):
+# at -O0 they are too slow to poll USART1 at 230400 baud and drop bytes
+# (overrun) between the frame header and the CRC.
+COMM_OPT ?= s
+COMM_OBJS = simpleserial-mlkem.o simpleserial.o hal.o \
+            stm32f4_hal.o stm32f4_hal_lowlevel.o stm32f4_sysmem.o stm32f4xx_hal_rng.o
+$(addprefix $(OBJDIR)/,$(COMM_OBJS)): CFLAGS += -O$(COMM_OPT)

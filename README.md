@@ -70,8 +70,9 @@ ChipWhisperer 빌드 시스템 파일은 `firmware/mcu`에 들어 있고, STM32F
 sudo apt install -y gcc-arm-none-eabi libnewlib-arm-none-eabi make
 
 cd firmware/mcu/simpleserial-mlkem
-make PLATFORM=CW308_STM32F4 IMPL=clean OPT=0                      # ML-KEM-768, clean, 트리거 A+B (연구 기본 구성)
-make PLATFORM=CW308_STM32F4 IMPL=clean OPT=0 TRIGGER_A=1 TRIGGER_B=0   # 트리거 A만
+make PLATFORM=CW308_STM32F4 IMPL=clean                            # ML-KEM-768, clean, 트리거 A+B, -Os (노트북 기본 구성)
+make PLATFORM=CW308_STM32F4 IMPL=clean TRIGGER_A=1 TRIGGER_B=0    # 트리거 A만
+make PLATFORM=CW308_STM32F4 IMPL=clean OPT=0                      # ML-KEM 코드만 -O0 (통신 코드는 항상 -Os)
 make PLATFORM=CW308_STM32F4 PARAMS=1024 IMPL=m4fstack             # ML-KEM-1024, pqm4 m4fstack (트리거 없음)
 ```
 
@@ -83,10 +84,11 @@ make PLATFORM=CW308_STM32F4 PARAMS=1024 IMPL=m4fstack             # ML-KEM-1024,
 | `TRIGGER_B` | `0` `1` | `1` | 트리거 B(`poly_tomsg`) 켜기/끄기 |
 | `TRIGGER` | `0` `1` | (없음) | 지정하면 `TRIGGER_A`, `TRIGGER_B`를 둘 다 이 값으로 |
 | `SS_VER` | `SS_VER_2_1` | `SS_VER_2_1` | SimpleSerial 버전. 2.1만 지원(다른 값이면 `make` 오류) |
-| `OPT` | `0` `1` `2` `3` `s` | `s` | 컴파일 최적화 수준(`-O<값>`). pqm4 기본은 `3`, CW 기본은 `s` |
+| `OPT` | `0` `1` `2` `3` `s` | `s` | ML-KEM 코드(pqm4/PQClean, fips202)의 최적화 수준(`-O<값>`). pqm4 기본은 `3`, CW 기본은 `s` |
+| `COMM_OPT` | `0` `1` `2` `3` `s` | `s` | 통신·HAL·명령 처리 코드의 최적화 수준. `-O0`이면 230400 baud에서 UART 바이트를 놓치므로 바꾸지 마세요 |
 
 > 어셈블리(NTT, basemul, Keccak)는 `OPT`의 영향을 받지 않지만 주변 C 코드의 명령 순서와 누설 위치가 달라집니다.
-> 노트북은 feasibility 단계라 누설이 잘 보이는 `OPT = "0"`을 기본으로 씁니다. pqm4 연구와 조건을 맞출 때는 `OPT=3`.
+> 노트북은 CW 강의 노트북(AES, ECC 등)과 같은 `OPT = "s"`를 기본으로 씁니다. 누설을 더 뚜렷하게 보려면 `OPT=0`, pqm4 연구와 맞출 때는 `OPT=3`.
 
 출력 파일 이름은 `simpleserial-mlkem<PARAMS>-<IMPL>-CW308_STM32F4.hex`입니다.
 CW 빌드 시스템의 `make`는 매번 전체를 다시 빌드하므로, 옵션을 바꿀 때 `make clean`이 필요 없습니다.
@@ -115,7 +117,12 @@ CW 예제(`simpleserial-aes` 등)처럼 트리거 위치는 소스에 `trigger_h
 
 트리거는 함수 안이 아니라 `indcpa_dec`의 호출 지점에 있습니다. `polyvec_basemul_acc_montgomery`는 재암호화(`indcpa_enc`)에서도
 K+1번 불리므로, 함수 안에 넣으면 비밀키와 무관한 곱셈에서도 트리거가 걸립니다.
-한 번의 `d` 명령에서 A(먼저) → B 순서로 펄스가 최대 두 번 나옵니다(768/-O0 에뮬레이터: A 169,127 / 간격 182,058 / B 12,884 명령어).
+한 번의 `d` 명령에서 A(먼저) → B 순서로 펄스가 최대 두 번 나옵니다. 768 `clean` 에뮬레이터 명령어 수:
+
+| `OPT` | A | A 끝 → B 시작 | B | `crypto_kem_dec` 전체 |
+|---|---|---|---|---|
+| `s` | 38,791 | 46,530 | 3,283 | 약 117만 |
+| `0` | 169,107 | 182,038 | 12,864 | 약 331만 |
 현재 트리거 블록은 ML-KEM-768 `clean`에만 들어 있습니다. 다른 파라미터셋에서 쓰려면 같은 블록을 해당 `indcpa.c`에 넣으세요.
 `#ifdef`가 없는 구현을 `TRIGGER_A/B=1`로 빌드하면 `make`가 경고를 냅니다(트리거 없는 펌웨어).
 
@@ -215,7 +222,7 @@ ChipWhisperer를 갱신하면 `chipwhisperer-fw-extra` 서브모듈도 그 커�
 | `STM32F4 HAL missing` | 서브모듈 미초기화 → `git submodule update --init --depth 1` |
 | 어셈블러가 `vmov` 등을 거부 | `ASFLAGS += -mfpu=fpv4-sp-d16` 누락 |
 | 복호화 중 HardFault(응답 없음) | FPU(CPACR) 비활성 |
-| `ack 없음` / 응답 타임아웃 | 펌웨어와 호스트의 `SS_VER` 불일치(노트북 `SS_VER = "SS_VER_2_1"`로 Setup을 다시 실행), baud 불일치 |
+| `ack 없음` / 응답 타임아웃 | 펌웨어와 호스트의 `SS_VER` 불일치(노트북 `SS_VER = "SS_VER_2_1"`로 Setup을 다시 실행), baud 불일치, `COMM_OPT=0`으로 빌드(UART overrun: 이어서 보낸 명령에 `e` 에러 0x04) |
 | `Device reported error 0x10/0x11` | 조각 번호/길이 오류 → 조각 크기는 `i`가 알려주는 값(240) 사용 |
 | 노트북에서 "펌웨어가 설정과 다릅니다" | 다른 옵션으로 빌드한 hex가 플래시됨 → 2·3단계 다시 실행 |
 | 공유 비밀 불일치 | `tools/verify_emu.py`로 ELF부터 검증 |
